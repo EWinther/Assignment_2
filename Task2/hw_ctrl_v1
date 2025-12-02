@@ -1,0 +1,230 @@
+----------------------------------------------------------------------------------
+-- hw_ctrl_v1
+-- Collect LOAD0, LOAD1 and LOAD2 into LOAD
+----------------------------------------------------------------------------------
+
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+-------------------------------------------
+-- ENTITY
+-------------------------------------------
+entity hw_ctrl is
+    Port (
+        clk     : in  std_logic;
+        reset   : in  std_logic;
+        start   : in  std_logic;
+
+        ---------------------------------------------------
+        -- Datapath → controller
+        ---------------------------------------------------
+        row_ready        : in std_logic;
+        sobel_row_done   : in std_logic;
+        sobel_word_ready : in std_logic;
+        last_pix         : in std_logic;
+
+        ---------------------------------------------------
+        -- Controller → datapath
+        ---------------------------------------------------
+        load_en          : out std_logic;
+        load_row         : out std_logic_vector(1 downto 0);
+        do_sobel         : out std_logic;
+        write_back       : out std_logic;
+        rotate_buf       : out std_logic;
+        next_row         : out std_logic;    -- new: used in your acc2 window shift
+        ram_en           : out std_logic;
+        ram_we           : out std_logic;
+        shift_window  : out std_logic;
+
+        finish : out std_logic
+        );
+end hw_ctrl;
+
+
+-------------------------------------------
+-- ARCHITECTURE
+-------------------------------------------
+architecture Behavioral of hw_ctrl is
+    type state_type is (
+        IDLE, 
+        LOAD0, 
+        LOAD1, 
+        LOAD2, 
+        SOBEL, 
+        WRITE, 
+        NEXT_LINE, 
+        DONE
+        );
+
+    signal state, next_state : state_type;
+       
+begin
+    
+    -------------------------------------------
+    -- FMS  - Sequentinal process
+        --Start sequence for the state machine:
+        -- ensuring startup is in first state "IDLE"
+        -- and each change is at rising edge of clk
+    -------------------------------------------
+    seq : process(clk, reset)
+    begin
+        if reset = '1' then
+            state <= IDLE;
+        elsif rising_edge(clk) then
+            state <= next_state;
+        end if;
+    end process;
+    
+    -------------------------------------------
+    -- FMS  - Combinatorical process
+    -------------------------------------------
+    comb : process(state, start, sobel_row_done, row_ready)
+    begin
+        -------------------------------------------------
+        -- 1) Default values
+        -------------------------------------------------
+        ram_en       <= '0';
+        ram_we       <= '0';
+        load_row     <= "00";
+        shift_window <= '0';
+        do_sobel     <= '0';
+        write_back   <= '0';
+        finish       <= '0';
+
+        next_state   <= state;  -- default: stay in current state
+   
+        -------------------------------------------------
+        -- 2) Conbinatorical state machine
+        -------------------------------------------------
+        case state is
+
+        -------------------------------------------------
+        when IDLE =>
+           -- Vent på start
+           if start = '1' then
+               -- Start med at læse første linebuffer (LB0)
+               ram_en   <= '1';
+               ram_we   <= '0';      -- read
+               load_row <= "00";     -- vælg LB0 i datapath
+               next_state <= LOAD0;
+           end if;
+
+        -------------------------------------------------
+        when LOAD0 =>
+           -- Læs til LB0 (én clock-cyklus antaget nok)
+           ram_en   <= '1';
+           ram_we   <= '0';     -- When '0' the acc will READ when '1' it will WRITE
+           load_row <= "00";
+           load_en <='1';
+           shift_window <= '0';
+           do_sobel     <= '0';
+           write_back   <= '0';
+           finish       <= '0';
+           
+           if row_ready = '1' then
+               next_state <= LOAD1; -- hele LB0 er fyldt → gå videre
+           else
+               next_state <= LOAD0; -- bliv her indtil acc2 har fyldt hele LB0
+           end if;
+
+           -- Next state: Read into LB1
+           next_state <= LOAD1;
+
+        -------------------------------------------------
+        when LOAD1 =>
+           -- Next state: Read into LB1
+           ram_en   <= '1';
+           ram_we   <= '0';
+           load_row <= "01";
+           
+           if row_ready = '1' then
+                next_state <= LOAD2; -- Næste state: læs til LB2
+           else
+                next_state <= LOAD1;
+           end if;
+
+        -------------------------------------------------
+        when LOAD2 =>
+           -- Next state: Read into LB2 until a valid 3x3 window can be made
+           ram_en   <= '1';
+           ram_we   <= '0';
+           load_row <= "10";
+
+           if row_ready = '1' then
+               next_state <= SOBEL; -- Window is ready, start SOBEL
+           else
+               next_state <= LOAD2; -- Stay in LOAD2 and read
+           end if;
+
+        -------------------------------------------------
+        when SOBEL =>
+            do_sobel <= '1';
+        
+            if sobel_word_ready='1' then
+                next_state <= WRITE;
+        
+            elsif last_pix='1' then
+                next_state <= DONE;
+        
+            elsif sobel_row_done='1' then
+                next_state <= NEXT_LINE;
+        
+            else
+                next_state <= SOBEL;
+            end if;
+            
+        -------------------------------------------------
+        when WRITE =>
+           -- Skriv den beregnede pixel tilbage i RAM
+           ram_en     <= '1';
+           ram_we     <= '1';
+           write_back <= '1';
+
+           -- Beslut hvad der nu skal ske
+           if last_pix = '1' then
+               -- Hele billedet færdigt
+               next_state <= DONE;
+
+           elsif sobel_row_done = '1' then
+               -- Rækken er færdig, skift til næste række
+               next_state <= NEXT_LINE;
+
+           else
+               if sobel_row_done = '1' then
+                   next_state <= NEXT_LINE;
+               else
+                   -- sikkerhed: vent i LOAD2-agtig tilstand på næste vindue
+                   next_state <= SOBEL;
+               end if;
+           end if;
+
+        -------------------------------------------------
+        when NEXT_LINE =>
+           -- Her kunne man evt. sætte et signal til datapath
+           -- om at rotere linebuffere. Vi holder det simpelt:
+           -- gå tilbage og læs en "triplet" (3 rækker) for næste position.
+           -- (Detaljerne afhænger af din acc2-implementering)
+           ram_en   <= '1';
+           ram_we   <= '0';
+           load_row <= "10";  -- fx begynd at fylde LB2 med næste række
+
+           -- Når acc2 har sat row_ready for næste række,
+           -- hopper vi tilbage i SOBEL; ellers kan du lade den gå via LOAD0
+           if row_ready = '1' then
+               next_state <= SOBEL;
+           else
+               next_state <= LOAD0;
+           end if;
+
+        -------------------------------------------------
+        when DONE =>
+           -- Signalér til CPU, at vi er færdige
+           finish <= '1';
+           -- Bliv i DONE indtil reset
+           next_state <= DONE;
+
+        end case;
+    end process;
+    
+end Behavioral;
