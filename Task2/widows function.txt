@@ -1,0 +1,33 @@
+
+state wido
+
+output buffer = sobel wido(lb0, lb1, lb2)
+
+function sobel wido(x 532 down to 0, y 532 downto 0 , z 352 downto 0)
+for i in 0 to 351 loop
+x1= x8*i+7 downto 8*i 
+x2 = x8*i+1+7 
+x3 = x8*i+2+7
+y1
+y2
+y3
+z1
+z2
+z3
+if i < 352
+next state sobel
+else 
+next state witdr
+
+  invert4(read_buf) -- call the function
+    function invert4(w : std_logic_vector(31 downto 0))
+        return std_logic_vector is
+        variable r : std_logic_vector(31 downto 0);
+        variable b : unsigned(7 downto 0);
+    begin
+        for i in 0 to 3 loop
+            b := unsigned(w(8*i+7 downto 8*i));
+            r(8*i+7 downto 8*i) := std_logic_vector(to_unsigned(255,8) - b);
+        end loop;
+        return r;
+    end function;
