@@ -61,7 +61,7 @@ architecture rtl of acc is
     signal row_cnt     : integer range 0 to 287 :=0;
     signal active_buf   : integer range 0 to 2 :=0;    
     -- FLAGS
-    signal Data_ready   : std_logic := '0';
+    signal Data_ready   : std_logic := '0';     -- Data read from RAM ready flag
     --signal win_ready    : std_logic := '0';
     signal buf_ready    : std_logic :='0';
     signal load_hold    : std_logic :='0';
@@ -73,14 +73,20 @@ architecture rtl of acc is
     signal sobel_out     : pixel_t;
     
     
-    -- NEW SIGNALS -- 
-    -- Buffer rotation for row change and new filling of a LBx
+   ------------ -- NEW SIGNALS -- ----------------
+    -- Buffer rotation for row change and new filling of LBx
     signal rotate_buf   : std_logic := '0';
-         
+    
+    -- Word pack for 32-word to write back to RAM
+    signal sobel_word   : std_logic_vector(31 downto 0);    -- one full 32-bit word ready for write back to mem
+    signal sobel_pix_cnt: integer range 0 to 3 := 0;    -- Counter for each pixel collected i buffer (count from 1 to 4 pix)
+    signal sobel_word_ready : std_logic;    -- Flag for when a full 32-word is collected in write buffer.
+    
+    signal RAM_data_write : std_logic_vector(31 downto 0);
     
 begin            
 	-----------------------------------------------------
-	-- PROCESS
+	-- PROCESS - TESTED OK!
 	-- Load from memory
     ----------------------------------------------------
 	Load_proc : process(clk)
@@ -155,21 +161,21 @@ begin
                     
                     end if;
                 
-                -- Vi må gerne gå til næste række
-                if row_cnt < IMG_HEIGHT-1 then
-                   row_cnt <= row_cnt + 1;
-                end if;
-            end if; -- col / LAST_COL
-        end if; -- start & load_hold & not data_ready
-        end if; -- reset
-    end if; -- rising_edge
- end if;
-end process Load_proc;
-
-finish <= data_ready;
-
------------------------------------------------------------------------------------------------------             
-    -------------------------------------------------------
+                    -- Vi må gerne gå til næste række
+                    if row_cnt < IMG_HEIGHT-1 then
+                       row_cnt <= row_cnt + 1;
+                    end if;
+                end if; -- col / LAST_COL
+            end if; -- start & load_hold & not data_ready
+            end if; -- reset
+        end if; -- rising_edge
+     end if;
+    end process Load_proc;
+    
+    finish <= data_ready;
+           
+           
+   -------------------------------------------------------
     -- PROCESS 
     -- Rotate buffers when row is done
     -------------------------------------------------------
@@ -223,42 +229,45 @@ finish <= data_ready;
     
     ---------------------------------------------------------------
     -- PROCESS
-    -- Extract data from LB[2:0] and place into sobelwindow (3 msb)
+    -- For every 4 pixel, pack to a 32-bit word ready to send to RAM
     ----------------------------------------------------------------
     word_pack : process(clk)
     begin
         if rising_edge(clk) then
-        if reset = '1' then
-            sobel_word       <= (others => '0');
-            sobel_pix_cnt    <= 0;
-            sobel_word_ready <= '0';
-        elsif do_sobel = '1' then
-            sobel_word_ready <= '0';  -- default hver clk
-    
-            case sobel_pix_cnt is
-                when 0 =>
-                    sobel_word( 7 downto  0) <= sobel_out;
-                when 1 =>
-                    sobel_word(15 downto  8) <= sobel_out;
-                when 2 =>
-                    sobel_word(23 downto 16) <= sobel_out;
-                when others =>  -- 3
-                    sobel_word(31 downto 24) <= sobel_out;
-            end case;
-    
-            if sobel_pix_cnt = 3 then
-                sobel_pix_cnt    <= 0;
-                sobel_word_ready <= '1';  -- nu er 32-bit ord klar til write
+            if reset = '1' then
+                sobel_word       <= (others => '0');    -- Setting 32-bit word to all 0
+                sobel_pix_cnt    <= 0;      -- Amount of processed pixels collected i word buffer
+                sobel_word_ready <= '0';    -- Set flag high once a full word (4 pix) is buffed.
+            
+                case sobel_pix_cnt is
+                    when 0 =>
+                        sobel_word( 7 downto  0) <= sobel_out;
+                    when 1 =>
+                        sobel_word(15 downto  8) <= sobel_out;
+                    when 2 =>
+                        sobel_word(23 downto 16) <= sobel_out;
+                    when others =>  -- 3
+                        sobel_word(31 downto 24) <= sobel_out;
+                end case;
+        
+                if sobel_pix_cnt = 3 then
+                    sobel_pix_cnt    <= 0;
+                    sobel_word_ready <= '1';  -- nu er 32-bit ord klar til write
+                else
+                    sobel_pix_cnt    <= sobel_pix_cnt + 1;
+                end if;
+                
+                if sobel_word_ready = '1' then
+                    --???????? Send full word to RAM????????
+                    RAM_data_write <= sobel_word(31 downto 0);
+                end if;
+                
             else
-                sobel_pix_cnt    <= sobel_pix_cnt + 1;
+                sobel_word_ready <= '0';
             end if;
-        else
-            sobel_word_ready <= '0';
         end if;
-    end if;
     end process;
 
-  
    
     ---------------------------------------------------------------
     -- PORT MAPPING 
