@@ -1,0 +1,411 @@
+-- -----------------------------------------------------------------------------
+--
+--  Title      :  Edge-Detection design project - task 2.
+--             :
+--  Developers :  YOUR NAME HERE - s??????@student.dtu.dk
+--             :  YOUR NAME HERE - s??????@student.dtu.dk
+--             :
+--  Purpose    :  This design contains an entity for the accelerator that must be build
+--             :  in task two of the Edge Detection design project. It contains an
+--             :  architecture skeleton for the entity as well.
+--             :
+--  Revision   :  1.0   ??-??-??     Final version
+--             :
+--
+-- -----------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- The entity for task two. Notice the additional signals for the memory.
+-- reset is active high.
+--------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+use work.types.all;
+
+
+entity acc is
+    port(
+        clk    : in  bit_t;             -- The clock.
+        reset  : in  bit_t;             -- The reset signal. Active high.
+        addr   : out halfword_t;        -- Address bus for data.
+        dataR  : in  word_t;            -- The data bus.
+        dataW  : out word_t;            -- The data bus.
+        en     : out bit_t;             -- Request signal for data.
+        we     : out bit_t;             -- Read/Write signal for data.
+        start  : in  bit_t;
+        finish : out bit_t ;
+        
+        win_ready: out bit_t;
+        ----############ EMILIES ############
+        rotate_buf : in bit_t;
+        do_sobel    : in bit_t;
+        result_pix  : in std_logic_vector(7 downto 0)
+    );
+end acc;
+
+
+--------------------------------------------------------------------------------
+-- The architecture of the accelerator
+--------------------------------------------------------------------------------
+architecture rtl of acc is
+
+    -- All internal signals are defined here  
+    subtype pixel_t is std_logic_vector(7 downto 0);
+    type row_t is array(0 to 351) of pixel_t;   
+    
+    constant IMG_HEIGHT  : integer := 288;                -- 0..287
+    constant IMG_WIDTH   : integer := 352;
+    constant BURST       : integer := 4;
+    constant LAST_COL    : integer := IMG_WIDTH - BURST;  -- 348
+   
+    -- For filing up buffers
+    signal LB0, LB1, LB2 : row_t;
+    signal col          : integer range 0 to 351 := 0;
+    signal row_cnt     : integer range 0 to 287 :=0;
+    signal active_buf   : integer range 0 to 2 :=0;   
+     
+    -- FLAGS
+    signal Data_ready   : std_logic := '0';     -- Data read from RAM ready flag
+    signal buf_ready    : std_logic :='0';      -- When 3 buffers are full
+    signal load_hold    : std_logic :='0';      -- Loading buffers comming to a halt before overwriting
+    
+    -- For sobel window shift (without FSM)
+    --signal sobel_en   : std_logic := '0';       --<<<<<<<<<<<<<<<<<<<<<<<<<< TEMP FLAG: Telling when sobel window is created and sobel window can shift
+    
+    -- For each pixel in the 3x3 window
+    signal p00, p01, p02 : pixel_t;
+    signal p10, p11, p12 : pixel_t;
+    signal p20, p21, p22 : pixel_t;
+    signal sobel_out     : pixel_t;
+    
+    -- Word pack for 32-word to write back to RAM
+    signal sobel_word   : std_logic_vector(31 downto 0);    -- one full 32-bit word ready for write back to mem
+    signal sobel_pix_cnt: integer range 0 to 3 := 0;    -- Counter for each pixel collected i buffer (count from 1 to 4 pix)
+    signal sobel_word_full : std_logic;    -- Flag for when a full 32-word is collected in write buffer.
+    
+    -- Window shift
+    signal sobel_col_cnt    : integer range 0 to 351;   --<<<<<<<<<< TEMP FLAG: for when sobel ops reach end of one row
+   
+   ----------------------------------------------------------------
+    -- Signals from FSM
+    ----------------------------------------------------------------
+    signal ram_en_s       : std_logic := '0';
+    signal ram_we_s       : std_logic := '0';
+    signal load_en_s      : std_logic := '0';
+    signal do_sobel_s     : std_logic := '0';   -- From FSM to ensur sobel only runs when buffers fully loaded
+    signal write_back_s   : std_logic := '0';
+    signal finish_s       : std_logic := '0';
+    
+    ------################# EMILIEs ######################
+    signal rotate_buf_s : std_logic := '0';
+    --signal sobel_en_s : std_logic := '0';
+    signal sobel_row_done : std_logic := '0';
+    signal win_ready_s : std_logic := '0';
+    signal result_out_buf : pixel_t;   -- Registered sobel output from sobel_3x3
+
+    -- Sobel handshake placeholder (håndteres senere)
+    signal sobel_word_ready : std_logic := '0';
+    
+    -- Write to RAM
+    signal output_buf : row_t;
+    
+begin            
+
+
+	-----------------------------------------------------
+	-- PROCESS
+	-- Load from memory
+    ----------------------------------------------------
+	Load_proc : process(clk)
+    begin
+    if rising_edge(clk) then
+        if reset = '1' then
+            col <= 0;
+            row_cnt <= 0;
+            active_buf <= 0;
+            data_ready <= '0';
+            buf_ready <= '0';
+            load_hold <= '0';
+            
+            LB0 <= (others => (others => '0'));
+            LB1 <= (others => (others => '0'));
+            LB2 <= (others => (others => '0'));
+    
+        else 
+            if (sobel_row_done = '1') and (load_hold = '1') then -- (win_ready = '1') and (load_hold = '1') then
+                load_hold <= '0';
+            end if;
+    
+        if (row_cnt = IMG_HEIGHT-1) and (buf_ready = '1') and (sobel_row_done = '1') then    -- (win_ready = '1') then
+            data_ready <= '1';
+            buf_ready  <= '0';
+        end if;
+    
+        ----------------------------------------------------------------
+        if (load_en_s = '1') AND (load_hold = '0') AND (data_ready = '0') then  
+            -- Write 4 pixels to selected buffer
+            case active_buf is 
+                  when 0 => 
+                      LB0(col )   <= dataR(31 downto 24);
+                      LB0(col+1)  <= dataR(23 downto 16);
+                      LB0(col+2)  <= dataR(15 downto 8);
+                      LB0(col+3)  <= dataR(7 downto 0);
+                  
+                  when 1 =>
+                      LB1(col )   <= dataR(31 downto 24);
+                      LB1(col+1)  <= dataR(23 downto 16);
+                      LB1(col+2)  <= dataR(15 downto 8);
+                      LB1(col+3)  <= dataR(7 downto 0);
+                  
+                  when 2 =>
+                      LB2(col )   <= dataR(31 downto 24);
+                      LB2(col+1)  <= dataR(23 downto 16);
+                      LB2(col+2)  <= dataR(15 downto 8);
+                      LB2(col+3)  <= dataR(7 downto 0);
+                  
+                  when others =>
+                      null;
+            end case;
+          
+            if col < LAST_COL then
+                col <= col + BURST; --col + 4
+            
+            else
+                col <= 0;
+                
+                if active_buf < 2 then
+                    active_buf <= active_buf + 1;
+                    
+                else
+                    active_buf <= 0;
+                    
+                    if buf_ready = '0' then
+                       buf_ready <= '1';
+                    else
+                    
+                        if sobel_row_done = '0' then     -- win_ready = '0' then
+                            load_hold <= '1';
+                        else
+                            load_hold <= '0';
+                        end if;
+                    
+                    end if;
+                
+                    if row_cnt < IMG_HEIGHT-1 then
+                       row_cnt <= row_cnt + 1;
+                    end if;
+                end if; -- active_buf
+            end if; -- col/LAST_COL
+
+            end if; -- load_en_s & load_hold & not data_ready
+
+        end if; -- reset
+    end if; -- rising_edge
+    end process Load_proc;
+    
+    ----------------------------------------------------------------
+    finish <= finish_s;
+        
+         
+   -------------------------------------------------------
+    -- PROCESS 
+    -- Rotate buffers when row is done
+    -------------------------------------------------------
+    rotate_proc : process(clk)
+    begin
+        if rising_edge(clk) then
+            if reset='1' then
+                -- Explicit clearing buffers to ensure LB[0:2] is 0 at reset
+                LB0 <= (others => (others => '0'));
+                LB1 <= (others => (others => '0'));
+                LB2 <= (others => (others => '0'));
+                
+            --elsif rotate_buf = '1' then   -- Flag set from hw_ctrl (FSM)
+              elsif rotate_buf_s = '1' then       -- <<<<<<<<<<<<<<<<<<<<<<< TEMP before FSM elsif: FSM_STATE = ROTATE then  -- NOT: win_ready = '1' AND load_hold = '0' then
+                LB0 <= LB1;
+                LB1 <= LB2;
+                -- LB2 is then filled in "LOAD-row" state
+                
+            end if;
+        end if;
+    end process;
+
+    
+        ---------------------------------------------------------------
+        -- PROCESS
+        -- Extract data from LB[2:0] and place into sobelwindow (3 msb)
+        ----------------------------------------------------------------
+        create_window : process(LB0, LB1, LB2, sobel_col_cnt) --<<<<<<<<<<<<<<<<<<<<<< sobel_col_cnt
+        begin
+            if do_sobel_s = '0' THEN
+           -- Default-safe for boundary, set pixels to 0
+            p00 <= (others => '0');  p01 <= (others => '0');  p02 <= (others => '0');
+            p10 <= (others => '0');  p11 <= (others => '0');  p12 <= (others => '0');
+            p20 <= (others => '0');  p21 <= (others => '0');  p22 <= (others => '0');
+        
+            -- Only output valid window if col is in valid region
+            elsif sobel_col_cnt >= 1 AND sobel_col_cnt <= 350 THEN     --<<<<<<<<<<<<<<<<<<<<<<<<<<<<< TEMP before FSM else: col >= 1 and col <= 350 then
+                -- sobel window row 0
+                p00 <= LB0(sobel_col_cnt-1);
+                p01 <= LB0(sobel_col_cnt);
+                p02 <= LB0(sobel_col_cnt+1);
+        
+                -- sobel window row 1
+                p10 <= LB1(sobel_col_cnt-1);
+                p11 <= LB1(sobel_col_cnt);
+                p12 <= LB1(sobel_col_cnt+1);
+        
+                -- sobel window row 2
+                p20 <= LB2(sobel_col_cnt-1);
+                p21 <= LB2(sobel_col_cnt);
+                p22 <= LB2(sobel_col_cnt+1);
+            end if;
+        end process;
+        
+        
+        ---------------------------------------------------------------
+        -- PROCESS
+        -- Keep sobel output in a hold buffer 
+        ----------------------------------------------------------------
+        sobel_result_proc : process(clk)
+        begin
+            if rising_edge(clk) then
+                if do_sobel_s = '1' then
+                    result_out_buf <= sobel_out;  -- safe result
+                else
+                    result_out_buf <= (others => '0'); -- hold prev value
+                end if;
+            end if;
+        end process;
+        
+        
+        ---------------------------------------------------------------
+        -- PROCESS
+        -- Shift window one pixel each time until pix 350 i reached
+        ----------------------------------------------------------------
+        window_shift : process(clk, reset)
+        begin
+            
+            if rising_edge(clk) then
+                if reset = '1' then
+                    sobel_col_cnt <= 0;
+                     
+                    else
+                        if sobel_col_cnt >= 350 then
+                            win_ready_s <= '1';
+                            sobel_row_done <= '1';
+                            sobel_col_cnt <= 0;       -- wrap around
+                            
+                        elsif do_sobel_s = '1' then
+                            win_ready_s <= '0';
+                            sobel_row_done <= '0';
+                            sobel_col_cnt <= sobel_col_cnt + 1;
+                            
+                            else
+                                win_ready_s <= '0';
+                                sobel_row_done <= '0';
+                                sobel_col_cnt <= 0;
+                        end if;
+                        
+                end if;
+            end if;
+            
+        end process;    
+    
+    
+    ---------------------------------------------------------------
+    -- PROCESS
+    -- For every 4 pixel, pack to a 32-bit word ready to send to RAM
+    ----------------------------------------------------------------
+--    word_pack : process(clk)
+--    begin
+--        if rising_edge(clk) then
+--            if reset = '1' then
+--                sobel_word       <= (others => '0');    -- Setting 32-bit word to all 0
+--                sobel_pix_cnt    <= 0;      -- Amount of processed pixels collected i word buffer
+--                sobel_word_full <= '0';    -- Set flag high once a full word (4 pix) is buffed.
+            
+--                case sobel_pix_cnt is
+--                    when 0 =>
+--                        sobel_word( 7 downto  0) <= result_out_but;
+--                    when 1 =>
+--                        sobel_word(15 downto  8) <= result_out_buf;
+--                    when 2 =>
+--                        sobel_word(23 downto 16) <= result_out_buf;
+--                    when others =>  -- 3
+--                        sobel_word(31 downto 24) <= result_out_buf;
+--                end case;
+        
+--                if sobel_pix_cnt = 3 then
+--                    sobel_pix_cnt    <= 0;
+--                    sobel_word_full <= '1';  -- nu er 32-bit ord klar til write
+--                else
+--                    sobel_pix_cnt    <= sobel_pix_cnt + 1;
+--                end if;
+                
+--                if sobel_word_full = '1' then
+--                    --???????? Send full word to RAM????????
+--                    RAM_data_write <= sobel_word(31 downto 0);
+--                end if;
+                
+--            else
+--                sobel_word_full <= '0';
+--            end if;
+--        end if;
+--    end process;
+
+   
+    ---------------------------------------------------------------
+    -- PORT MAPPING 
+    -- Sobel_3x3 to acc2
+    ----------------------------------------------------------------
+    SOBEL_OPS : entity work.sobel_3x3
+    port map (
+        p00 => p00, p01 => p01, p02 => p02,
+        p10 => p10, p11 => p11, p12 => p12,
+        p20 => p20, p21 => p21, p22 => p22,
+        result_pix => sobel_out
+    );
+
+    ----------------------------------------------------------------
+    -- PORT MAPPING
+    -- FSM
+    ----------------------------------------------------------------
+    u_fsm : entity work.fsm
+    port map (
+        -- output from fsm  => input to acc via _s signal
+       clk               => std_logic(clk),
+       reset             => std_logic(reset),
+       start             => std_logic(start),
+
+       data_ready        => data_ready,
+       buf_ready         => buf_ready,
+       load_hold         => load_hold,
+       sobel_word_ready  => sobel_word_ready,
+      
+       dataR             => dataR,
+       ram_en            => ram_en_s,
+       ram_we            => ram_we_s,
+       load_en           => load_en_s,
+       do_sobel          => do_sobel_s,
+       write_back        => write_back_s,
+       finish            => finish_s,
+       
+       -------######## EMILIEs ################
+       rotate_buf       => rotate_buf_s,
+       --sobel_en         => sobel_en_s,
+        win_ready         => win_ready_s
+   );
+
+   ----------------------------------------------------------------
+   -- Output ports
+   ----------------------------------------------------------------
+   en <= ram_en_s;
+   we <= ram_we_s;
+   dataW <= (others => '0');
+
+   addr <= (others => '0');  -- indtil adresselogik implementeres
+
+end rtl;
