@@ -1,0 +1,153 @@
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity fsm is
+    Port ( clk : in STD_LOGIC;
+           reset : in STD_LOGIC;
+           start   : in  std_logic;
+           En : out STD_LOGIC;
+           We : out STD_LOGIC;
+           Addr : out STD_LOGIC;
+           DataW : out STD_LOGIC_VECTOR (31 downto 0);
+           DataR : in STD_LOGIC_VECTOR (31 downto 0);
+           
+           finish           : out std_logic;
+           
+           ram_en           : out std_logic;
+           load_en          : out std_logic;
+           ram_we           : out std_logic;
+           win_ready        : in std_logic;
+           
+           data_ready       : in std_logic;   
+           buf_ready        : in std_logic;   
+           load_hold        : in std_logic;    
+           sobel_word_ready : in std_logic;
+           do_sobel         : out std_logic;
+           write_back       : out std_logic;
+           
+           ------Emilies
+           rotate_buf : out std_logic;
+           sobel_en : out std_logic
+    );
+end fsm;
+
+architecture Behavioral of fsm is
+
+   
+
+    type state_type is(
+        IDLE,
+        LOAD,
+        --LOAD_H,
+        SOBEL,
+        WRITE,
+        DONE
+    );
+
+    signal state, next_state : state_type;
+
+begin
+
+    seq: process(clk, reset)
+    begin
+        if reset = '1' then
+            state <= IDLE;
+        elsif rising_edge(clk) then
+            state <= next_state;
+        end if;
+    end process;
+
+
+    -- FMS - Combinatorical process
+    --------------------------------------------------------------
+    comb: process(state, start, win_ready, buf_ready, load_hold, 
+                  data_ready, sobel_word_ready)
+    begin
+    
+        -- Default val
+        ram_en <= '0';
+        ram_we <= '0';
+        load_en <= '0';
+        write_back <= '0';
+        do_sobel <= '0';
+        finish <= '0';
+        En <= '0';
+        We <= '0';
+        Addr <= '0';
+        DataW <= (others => '0');
+
+        next_state <= state;
+        
+        case state is
+        
+        -----------------------------------------------
+        when IDLE =>
+            
+            if START = '1' then
+                ram_en <= '1';
+                next_state <= LOAD;
+                
+            else
+                next_state <= state;
+            end if;
+            
+        ----------------------------------------------
+        when LOAD =>
+            ram_en <= '1';
+            ram_we <= '0'; --Implicit
+            load_en <= '1';
+            do_sobel <= '0';
+    
+            if (data_ready = '1') and (buf_ready = '1') then    --<<<<<<<<<<<<<<<<<<<< BLIVER DEN NOGEN SIDE SAND?
+                do_sobel <= '0';
+                next_state <= SOBEL;
+           
+              else
+                next_state <= state;
+            end if;
+            
+        ---------------------------------------------    
+        when SOBEL =>
+            do_sobel <= '1';            ----- EMILIEs
+        
+            if data_ready = '1' then
+                next_state <= DONE;
+                
+            elsif sobel_word_ready='1' then
+                next_state <= WRITE;
+               
+            elsif win_ready='1' then
+                rotate_buf <= '1';          ------ EMILIEs
+                next_state <= LOAD;
+        
+            else
+                rotate_buf <= '0';
+                next_state <= SOBEL;
+            end if;
+            
+    ----------------------------------------------
+        when WRITE =>
+            ram_we <= '1';
+            ram_en <= '1';
+            write_back <= '1';
+            
+            if data_ready = '1' then
+                next_state <= DONE;
+                
+            elsif win_ready = '1' then
+                next_state <= LOAD;
+                
+            else 
+                next_state <= SOBEL;
+            end if;
+            
+        ------------------------------------------------
+        when DONE =>
+            finish <= '1';
+            next_state <= state;
+         
+        end case;
+    end process;
+
+end Behavioral;
