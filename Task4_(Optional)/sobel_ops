@@ -5,9 +5,9 @@
 --
 -- Author: Emilie Teglers (s223043) 
 --
---Module Name: sobel_ops - Behavioral
+-- Module Name: sobel_ops - Behavioral
 --
---Description: The sobel operator to calculate the intensity
+-- Description: The sobel operator to calculate the intensity
 --              ranging from 0 to 255 (low to high).
 --
 -- Revision: 3
