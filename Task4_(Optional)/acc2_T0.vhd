@@ -3,8 +3,8 @@
 --
 --  Title      :  Edge-Detection design project - task 2.
 --             :
---  Developers :  YOUR NAME HERE - s??????@student.dtu.dk
---             :  YOUR NAME HERE - s??????@student.dtu.dk
+--  Developers :  jakob utne s225267@student.dtu.dk
+--             :  
 --             :
 --  Purpose    :  This design contains an entity for the accelerator that must be build
 --             :  in task two of the Edge Detection design project. It contains an
