@@ -1,0 +1,114 @@
+---------------------------------------------------------------------------------
+-- Create Date: 19.11.2025 10:07:04
+-- 
+-- Project Name: Assignment 2 
+--
+-- Author: Emilie Teglers (s223043) 
+--
+--Module Name: sobel_ops - Behavioral
+--
+--Description: The sobel operator to calculate the intensity
+--              ranging from 0 to 255 (low to high).
+--
+-- Revision: 3
+-- Revision 0.01 - File Created
+--
+-- Additional Comments: Operation tested and can calculate both high and low
+-- Intensity (magnitude) for x- and y-axies
+----------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+use work.types.all;
+
+-------------------------------------------------------------------------------- 
+-- Entity declaration for sobel operation.
+--------------------------------------------------------------------------------
+entity sobel_3x3 is
+    port (
+        p00, p01, p02 : in  std_logic_vector(7 downto 0); --pixel_t;
+        p10, p11, p12 : in  std_logic_vector(7 downto 0); --pixel_t;
+        p20, p21, p22 : in  std_logic_vector(7 downto 0); --pixel_t;
+
+        result_pix : out std_logic_vector(7 downto 0) --pixel_t
+        
+    );
+    
+end sobel_3x3;    
+
+
+-------------------------------------------------------------------------------- 
+-- Architecture of the sobel operator.
+--------------------------------------------------------------------------------
+architecture rtl of sobel_3x3 is
+begin
+    -------------------------------------------------
+    -- PROCESS - TESTED OK!
+    -- Defining the process of the 3x3 sobel window
+    -------------------------------------------------
+    sobel_proc : process(p00, p01, p02,
+                         p10, p11, p12,
+                         p20, p21, p22
+                         )
+        
+        -- Integer variables for the pixels casting 
+        variable i00, i01, i02 : integer;
+        variable i10, i11, i12 : integer;
+        variable i20, i21, i22 : integer;
+        
+        -- Integer variables for the calculation of Gx, Gy and D (mag)
+        variable dx  : integer;
+        variable dy  : integer;
+        variable mag : integer;
+        
+    begin
+        
+        -- Cast pixels to integers for calculation
+        i00 := to_integer(unsigned(p00));
+        i01 := to_integer(unsigned(p01));
+        i02 := to_integer(unsigned(p02));
+        
+        i10 := to_integer(unsigned(p10));
+        i11 := to_integer(unsigned(p11));
+        i12 := to_integer(unsigned(p12));
+        
+        i20 := to_integer(unsigned(p20));
+        i21 := to_integer(unsigned(p21));
+        i22 := to_integer(unsigned(p22));   
+        
+        -----------------------
+        -- The sobel operation
+        ------------------------
+        -- Calculate Dx
+        dx := 0;
+        dx := -i00 + i02
+              - 2*i10 + 2*i12
+              - i20 + i22;
+      
+        -- Calculate Dy
+        dy := 0;
+        dy := i00 + 2*i01 
+              + i02 - i20
+              - 2*i21 - i22;
+              
+        -- Calculate the center value D (mag)
+        mag := 0;
+        mag := abs(dx)+abs(dy);
+        
+        -- Saturate value [0:255] to ensure max for one pixel is 8-bit values
+        if mag < 0 then             -- Ensuring value wan't exceed 0
+            mag := 0;       
+        elsif mag > 255 then        -- Limits the value of the pixel to siut max of 8-bit values of 256
+            mag := 255;
+        end if;
+
+        ---------------------------------
+        -- The result of one pixel
+        -----------------------------------
+        -- Convert to vector 8-bit bus for memory write
+        result_pix <= std_logic_vector(to_unsigned(mag, 8));
+        
+    end process sobel_proc;
+
+end rtl;
